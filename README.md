@@ -1,4 +1,4 @@
-CVE 2014-3103 Proof Of Concept for PS4
+CVE 2014-1303 Proof Of Concept for PS4
 ==============
 This repository contains a poc for the CVE 2014-1303 originally disclosed by Liang Chen. It has been tested to work on system firmware 2.03, but should work for systems on a firmware < 2.50, the ROP test will however only work on 2.03.
 
