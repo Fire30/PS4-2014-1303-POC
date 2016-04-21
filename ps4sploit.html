@@ -35,6 +35,7 @@ function load() {
 
 function exploit()
 {
+  corrupted = undefined;
   // We need to put ArrayBufferView objects where the inputs previously were
   for(var i = 0; i < inputs.length;i+=1)
   {
